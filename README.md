@@ -5,3 +5,5 @@ Just add yor telegram api to **configure.swift**, run this vapor app, send /ping
 ```swift
 let tgApi: String = "..."
 ```
+
+Telegram bot by den for dog owners

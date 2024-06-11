@@ -138,7 +138,6 @@ final class DefaultBotHandlers {
             try await update.message?.reply(text: "status 200", bot: bot)
         })
     }
-}
 
 enum BookingState {
     case nameus

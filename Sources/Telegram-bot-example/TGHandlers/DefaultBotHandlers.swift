@@ -36,27 +36,33 @@ final class DefaultBotHandlers {
 
         await connection.dispatcher.add(TGMessageHandler(filters: .all) { update, bot in
             guard let userId = update.message?.from?.id else { return }
+            guard let text = update.message?.text else {
+                let params: TGSendMessageParams = .init(chatId: .chat(userId), text: "Простите, я понимаю только слова( \nУ меня же лапки!")
+                try await bot.sendMessage(params: params)
+                return
+            }
+
             guard let state = userStates[userId] else { return }
             
             switch state {
             case .nameus:
-                userStates[userId] = .dogname(userName: update.message?.text ?? "")
+                userStates[userId] = .dogname(userName: text)
                 let params: TGSendMessageParams = .init(chatId: .chat(userId), text: "Как зовут вашу собаку?")
                 try await bot.sendMessage(params: params)
             case .dogname(let userName):
-                userStates[userId] = .dogclass(userName: userName, dogName: update.message?.text ?? "")
+                userStates[userId] = .dogclass(userName: userName, dogName: text)
                 let params: TGSendMessageParams = .init(chatId: .chat(userId), text: "Какой породы собака?")
                 try await bot.sendMessage(params: params)
             case .dogclass(let userName, let dogName):
-                userStates[userId] = .time(userName: userName, dogName: dogName, dogClass: update.message?.text ?? "")
+                userStates[userId] = .time(userName: userName, dogName: dogName, dogClass: text)
                 let params: TGSendMessageParams = .init(chatId: .chat(userId), text: "Когда нужно забрать \(dogName)?")
                 try await bot.sendMessage(params: params)
             case .time(let userName, let dogName, let dogClass):
-                userStates[userId] = .loca(userName: userName, dogName: dogName, dogClass: dogClass, time: update.message?.text ?? "")
+                userStates[userId] = .loca(userName: userName, dogName: dogName, dogClass: dogClass, time: text)
                 let params: TGSendMessageParams = .init(chatId: .chat(userId), text: "Откуда забрать \(dogName)?")
                 try await bot.sendMessage(params: params)
             case .loca(let userName, let dogName, let dogClass, let time):
-                userStates[userId] = .phnum(userName: userName, dogName: dogName, dogClass: dogClass, time: time, loca: update.message?.text ?? "")
+                userStates[userId] = .phnum(userName: userName, dogName: dogName, dogClass: dogClass, time: time, loca: text)
                 let buttons: [[TGKeyboardButton]] = [
                     [.init(text: "Отправить свой номер", requestContact: true)]
                 ]
@@ -68,11 +74,12 @@ final class DefaultBotHandlers {
                 if let contact = update.message?.contact {
                     phnum = contact.phoneNumber ?? ""
                 } else {
-                    phnum = update.message?.text ?? ""
+                    phnum = text
                 }
-                let booking = Booking(userName: userName, dogName: dogName, dogClass: dogClass, time: time, phnum: phnum, loca: loca)
+                let booking = Booking(userId: userId, userName: userName, dogName: dogName, dogClass: dogClass, time: time, phnum: phnum, loca: loca)
                 bookingA[userId] = adminUserId
-                try await sendBookingToAdmin(booking: booking, bot: bot)
+                try await sendBookingToAdmin(booking: booking, bot: bot, app: app)
+
                 userStates.removeValue(forKey: userId)
                 let params: TGSendMessageParams = .init(chatId: .chat(userId), text: "Бронирование успешно завершено❤️ \nСпасибо!")
                 try await bot.sendMessage(params: params)
@@ -114,10 +121,11 @@ final class DefaultBotHandlers {
         })
     }
 
-    private static func sendBookingToAdmin(booking: Booking, bot: TGBotPrtcl) async throws {
+    private static func sendBookingToAdmin(booking: Booking, bot: TGBotPrtcl, app: Vapor.Application) async throws {
         let message = """
         Новое бронирование✅:
-        \nИмя хозяина: \(booking.userName)
+        \nID пользователя: \(booking.userId)
+        Имя хозяина: \(booking.userName)
         Имя собаки: \(booking.dogName)
         Порода собаки: \(booking.dogClass)
         Время: \(booking.time)
@@ -130,14 +138,65 @@ final class DefaultBotHandlers {
         let keyboard: TGInlineKeyboardMarkup = .init(inlineKeyboard: buttons)
         let params: TGSendMessageParams = .init(chatId: .chat(adminUserId), text: message, replyMarkup: .inlineKeyboardMarkup(keyboard))
         try await bot.sendMessage(params: params)
-        print(message)
+        
+
+        let payload = BookingPayload(userId: booking.userId, userName: booking.userName, dogName: booking.dogName, dogClass: booking.dogClass, time: booking.time, phnum: booking.phnum, loca: booking.loca)
+        
+        // Convert the payload to JSON and print it to the console
+        let jsonData = try JSONEncoder().encode(payload)
+        if let jsonString = String(data: jsonData, encoding: .utf8) {
+            print("JSON Payload: \(jsonString)")
+        }
+
+        try await sendBookingToServer(payload: payload, app: app)
     }
 
-    private static func commandstatkHandler(app: Vapor.Application, connection: TGConnectionPrtcl) async {
-        await connection.dispatcher.add(TGCommandHandler(commands: ["/http"]) { update, bot in
-            try await update.message?.reply(text: "status 200", bot: bot)
-        })
+    private static func sendBookingToServer(payload: BookingPayload, app: Vapor.Application) async throws {
+        let client = app.client
+        let url = URI(string: "http://62.84.115.125:5000/book")
+        
+        do {
+            let response = try await client.post(url, headers: ["Content-Type": "application/json"]) { req in
+                try req.content.encode(payload)
+            }
+            
+            guard response.status == .created else {
+                print("Ошибка при отправке данных о бронировании: \(response.status)")
+                return
+            }
+            
+            print("Данные о бронировании успешно отправлены")
+        } catch {
+            print("Произошла ошибка: \(error.localizedDescription)")
+        }
     }
+
+    private struct BookingPayload: Content {
+        let userId: Int64
+        let userName: String
+        let dogName: String
+        let dogClass: String
+        let time: String
+        let phnum: String
+        let loca: String
+        
+        enum CodingKeys: String, CodingKey {
+            case userId = "user_id"
+            case userName = "user_name"
+            case dogName = "dog_name"
+            case dogClass = "dog_class"
+            case time
+            case phnum
+            case loca
+        }
+    }
+}
+
+private func commandstatkHandler(app: Vapor.Application, connection: TGConnectionPrtcl) async {
+    await connection.dispatcher.add(TGCommandHandler(commands: ["/http"]) { update, bot in
+        try await update.message?.reply(text: "status 200", bot: bot)
+    })
+}
 
 enum BookingState {
     case nameus
@@ -149,6 +208,7 @@ enum BookingState {
 }
 
 struct Booking {
+    let userId: Int64
     let userName: String
     let dogName: String
     let dogClass: String

@@ -15,6 +15,7 @@ final class DefaultBotHandlers {
     private static func startHandler(app: Vapor.Application, connection: TGConnectionPrtcl) async {
         await connection.dispatcher.add(TGCommandHandler(commands: ["/start", "/dog"]) { update, bot in
             guard let userId = update.message?.from?.id else { return }
+            app.logger.info("\(userId) запустил бота")
             let buttons: [[TGInlineKeyboardButton]] = [
                 [.init(text: "Забронировать время", callbackData: "time"), .init(text: "Узнать подробнее", callbackData: "moreinf")]
             ]
@@ -29,6 +30,7 @@ final class DefaultBotHandlers {
     private static func booking(app: Vapor.Application, connection: TGConnectionPrtcl) async {
         await connection.dispatcher.add(TGCallbackQueryHandler(pattern: "time") { update, bot in
             guard let userId = update.callbackQuery?.from.id else { return }
+            app.logger.info("User \(userId) started booking")
             userStates[userId] = .nameus
             let params: TGSendMessageParams = .init(chatId: .chat(userId), text: "Начнем!❤️\nКак вас зовут?")
             try await bot.sendMessage(params: params)
@@ -39,11 +41,11 @@ final class DefaultBotHandlers {
             guard let text = update.message?.text else {
                 let params: TGSendMessageParams = .init(chatId: .chat(userId), text: "Простите, я понимаю только слова( \nУ меня же лапки!🐾")
                 try await bot.sendMessage(params: params)
+                app.logger.info("\(userId) отправил не текст")
                 return
             }
 
             guard let state = userStates[userId] else { return }
-            
             switch state {
             case .nameus:
                 userStates[userId] = .dogname(userName: text)
@@ -88,6 +90,7 @@ final class DefaultBotHandlers {
 
         await connection.dispatcher.add(TGCallbackQueryHandler(pattern: "moreinf") { update, bot in
             guard let userId = update.callbackQuery?.from.id, let messageId = update.callbackQuery?.message?.messageId else { return }
+            app.logger.info("\(userId) запросил информацию")
             try await bot.deleteMessage(params: .init(chatId: .chat(userId), messageId: messageId))
             let buttons: [[TGInlineKeyboardButton]] = [
                 [.init(text: "Вернуться", callbackData: "goback")]
@@ -113,6 +116,7 @@ final class DefaultBotHandlers {
         await connection.dispatcher.add(TGCallbackQueryHandler(pattern: "сancelbook") { update, bot in
             guard let adminId = update.callbackQuery?.from.id, adminId == adminUserId else { return }
             guard let userId = bookingA.first(where: { $0.value == adminUserId })?.key else { return }
+            app.logger.info("Админ отклонил заявку на прогулку \(userId)")
             
             let userParams: TGSendMessageParams = .init(chatId: .chat(userId), text: "Гав-Гав! \nК моему сожалению ваше бронирование отмененили по решению администратора😢 \n\nВы можете связаться с ним для выяснения обстоятельств: @dabyt ")
             try await bot.sendMessage(params: userParams)
@@ -132,13 +136,13 @@ final class DefaultBotHandlers {
         Адрес: \(booking.loca)
         Контакты: \(booking.phnum)
         """
+        app.logger.info("Инфа отправленна админу \(booking)")
         let buttons: [[TGInlineKeyboardButton]] = [
             [.init(text: "❌Отказаться❌", callbackData: "сancelbook")]
         ]
         let keyboard: TGInlineKeyboardMarkup = .init(inlineKeyboard: buttons)
         let params: TGSendMessageParams = .init(chatId: .chat(adminUserId), text: message, replyMarkup: .inlineKeyboardMarkup(keyboard))
         try await bot.sendMessage(params: params)
-        
 
         let payload = booki(userId: booking.userId, userName: booking.userName, dogName: booking.dogName, dogClass: booking.dogClass, time: booking.time, phnum: booking.phnum, loca: booking.loca)
 
@@ -153,6 +157,9 @@ final class DefaultBotHandlers {
             let response = try await client.post(url, headers: ["Content-Type": "application/json"]) { req in
                 try req.content.encode(payload)
             }
+            app.logger.info("Бронирование отправленно на сервер \(response.status)")
+        } catch {
+            app.logger.error("Ошибка отправки на сервер \(error)")
         }
     }
 
@@ -174,14 +181,16 @@ final class DefaultBotHandlers {
                 )
             }
             return bookings
-
+        } catch {
+            app.logger.error("Ошибка отправки истории \(userId): \(error)")
+            throw error
         }
-
     }
 
     private static func SendHis(app: Vapor.Application, connection: TGConnectionPrtcl) async {
         await connection.dispatcher.add(TGCommandHandler(commands: ["/history"]) { update, bot in
             guard let userId = update.message?.from?.id else { return }
+            app.logger.info("\(userId) запросил историю")
 
             do {
                 let bookings = try await servhistory(userId: userId, app: app)
@@ -208,6 +217,7 @@ final class DefaultBotHandlers {
             } catch {
                 let params: TGSendMessageParams = .init(chatId: .chat(userId), text: "Произошла ошибка непредвиденная ошибка! \nМы стараемся как можно быстрее решить проблему! Приношу прощения за предоставленные неудобства! ;(")
                 try await bot.sendMessage(params: params)
+                app.logger.error("Ошибка отправки истории\(userId): \(error)")
             }
         })
     }
